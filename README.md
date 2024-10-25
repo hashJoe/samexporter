@@ -130,6 +130,7 @@ bash convert_mobile_sam.sh
 ```bash
 pip install git+https://github.com/facebookresearch/sam2.git@c2ec8e14a185632b0a5d8b161928ceb50197eddc
 pip install onnx
+mkdir -p output_models && curl -o output_models/sam2.1_hiera_large.pt https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 python samexporter/export_sam21_cvat.py \
       --checkpoint=original_models/sam2.1_hiera_large.pt \
       --output_encoder output_models/sam2.1_hiera_large.encoder.onnx \
