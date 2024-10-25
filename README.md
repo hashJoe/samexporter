@@ -126,6 +126,18 @@ bash convert_mobile_sam.sh
 
 ## Convert Segment Anything 2 to ONNX
 
+### INSTALLATION
+```bash
+pip install git+https://github.com/facebookresearch/sam2.git@c2ec8e14a185632b0a5d8b161928ceb50197eddc
+pip install onnx
+python samexporter/export_sam21_cvat.py \
+      --checkpoint=original_models/sam2.1_hiera_large.pt \
+      --output_encoder output_models/sam2.1_hiera_large.encoder.onnx \
+      --output_decoder output_models/sam2.1_hiera_large.decoder.onnx \
+      --model_type sam2.1_hiera_large
+```
+NOTE: Might cause OOM on CPU 
+
 - Download Segment Anything 2 from [https://github.com/facebookresearch/segment-anything-2.git](https://github.com/facebookresearch/segment-anything-2.git). You can do it by:
 
 ```bash
