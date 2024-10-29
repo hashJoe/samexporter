@@ -4,7 +4,6 @@ import pathlib
 
 import torch
 from torch import nn
-import onnx
 from sam2.build_sam import build_sam2
 from sam2.modeling.sam2_base import SAM2Base
 
@@ -63,6 +62,7 @@ class SAM2ImageDecoder(nn.Module):
         high_res_feats_1: torch.Tensor,
         point_coords: torch.Tensor,
         point_labels: torch.Tensor,
+        orig_im_size: torch.Tensor,
         mask_input: torch.Tensor,
         has_mask_input: torch.Tensor,
     ):
@@ -86,7 +86,7 @@ class SAM2ImageDecoder(nn.Module):
             masks = masks[:, 1:, :, :]
             iou_predictions = iou_predictions[:, 1:]
         else:
-            masks, iou_pred = (
+            masks, iou_predictions = (
                 self.mask_decoder._dynamic_multimask_via_stability(
                     masks, iou_predictions
                 )
@@ -94,7 +94,41 @@ class SAM2ImageDecoder(nn.Module):
 
         masks = torch.clamp(masks, -32.0, 32.0)
 
-        return masks, iou_predictions
+        masks = masks.squeeze(0)
+        iou_predictions = iou_predictions.squeeze(0)
+
+        best_index = torch.argmax(iou_predictions)
+        best_mask = masks[best_index]
+
+        best_mask_resized = torch.nn.functional.interpolate(
+            best_mask.unsqueeze(0).unsqueeze(0),
+            size=(orig_im_size[0], orig_im_size[1]),
+            mode='bilinear',
+            align_corners=False
+        )
+
+        best_mask_resized = best_mask_resized.squeeze(0).squeeze(0)
+
+        best_mask_resized = (best_mask_resized > 0).to(torch.uint8)
+
+        nonzero = best_mask_resized.nonzero(as_tuple=True)
+
+        has_nonzero = (nonzero[0].numel() > 0) & (nonzero[1].numel() > 0)
+        default_val = torch.zeros((), dtype=torch.int64)
+        ytl = torch.where(has_nonzero, torch.min(nonzero[0]), default_val)
+        ybr = torch.where(has_nonzero, torch.max(nonzero[0]), default_val)
+        xtl = torch.where(has_nonzero, torch.min(nonzero[1]), default_val)
+        xbr = torch.where(has_nonzero, torch.max(nonzero[1]), default_val)
+
+        cropped_mask = best_mask_resized[ytl:ybr + 1, xtl:xbr + 1]
+
+        return (cropped_mask.unsqueeze(0).unsqueeze(0),
+                iou_predictions[best_index].unsqueeze(0).unsqueeze(0),
+                best_mask.unsqueeze(0).unsqueeze(0),
+                xtl,
+                ytl,
+                xbr,
+                ybr)
 
     def _embed_points(
         self, point_coords: torch.Tensor, point_labels: torch.Tensor
@@ -219,10 +253,6 @@ if __name__ == "__main__":
         output_names=["high_res_feats_0", "high_res_feats_1", "image_embed"],
     )
     print("Saved encoder to", args.output_encoder)
-    print("Simplifying encoder...")
-    onnx_model = onnx.load(args.output_encoder)
-    onnx.save(onnx_model, args.output_encoder)
-    print("Saved encoder to", args.output_encoder)
 
     sam2_decoder = SAM2ImageDecoder(
         sam2_model, multimask_output=multimask_output
@@ -242,19 +272,7 @@ if __name__ == "__main__":
     point_labels = torch.randint(low=0, high=1, size=(1, 5), dtype=torch.float)
     mask_input = torch.randn(1, 1, *mask_input_size, dtype=torch.float)
     has_mask_input = torch.tensor([1], dtype=torch.float)
-    orig_im_size = torch.tensor(
-        [input_size[0], input_size[1]], dtype=torch.float
-    )
-
-    masks, scores = sam2_decoder(
-        image_embed,
-        high_res_feats_0,
-        high_res_feats_1,
-        point_coords,
-        point_labels,
-        mask_input,
-        has_mask_input,
-    )
+    orig_im_size = torch.tensor([input_size[0], input_size[1]], dtype=torch.int)
 
     pathlib.Path(args.output_decoder).parent.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
@@ -265,6 +283,7 @@ if __name__ == "__main__":
             high_res_feats_1,
             point_coords,
             point_labels,
+            orig_im_size,
             mask_input,
             has_mask_input,
         ),
@@ -278,10 +297,11 @@ if __name__ == "__main__":
             "high_res_feats_1",
             "point_coords",
             "point_labels",
+            "orig_im_size",
             "mask_input",
             "has_mask_input",
         ],
-        output_names=["masks", "iou_predictions"],
+        output_names=["masks", "iou_predictions", "low_res_masks", "xtl", "ytl", "xbr", "ybr"],
         dynamic_axes={
             "point_coords": {0: "num_labels", 1: "num_points"},
             "point_labels": {0: "num_labels", 1: "num_points"},
@@ -289,8 +309,4 @@ if __name__ == "__main__":
             "has_mask_input": {0: "num_labels"},
         },
     )
-    print("Saved decoder to", args.output_decoder)
-    print("Simplifying decoder...")
-    onnx_model = onnx.load(args.output_decoder)
-    onnx.save(onnx_model, args.output_decoder)
     print("Saved decoder to", args.output_decoder)
